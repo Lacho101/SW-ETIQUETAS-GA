@@ -41,7 +41,13 @@ LABEL_H_MM = 25.00
 LABEL_W = LABEL_W_MM * mm
 LABEL_H = LABEL_H_MM * mm
 
-CONFIG_PATH = Path(__file__).parent / "config.json"
+def _config_path():
+    """En un .exe compilado la config se guarda junto al ejecutable."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent / "config.json"
+    return Path(__file__).parent / "config.json"
+
+CONFIG_PATH = _config_path()
 
 VERSION = "2.1"
 GITHUB_REPO = "Lacho101/SW-ETIQUETAS-GA"
