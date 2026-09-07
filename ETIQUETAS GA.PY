@@ -8,6 +8,9 @@ Requiere: PyQt6, reportlab, openpyxl
 import sys
 import os
 import json
+import shutil
+import tempfile
+import urllib.request
 import subprocess
 from pathlib import Path
 
@@ -17,8 +20,9 @@ from PyQt6.QtWidgets import (
     QRadioButton, QButtonGroup, QComboBox, QCheckBox, QFileDialog,
     QMessageBox, QFrame, QGroupBox, QSizePolicy, QScrollArea,
     QStatusBar, QSplitter, QTableWidget, QTableWidgetItem, QHeaderView,
+    QProgressDialog,
 )
-from PyQt6.QtCore import Qt, QRectF, QSize
+from PyQt6.QtCore import Qt, QRectF, QSize, QObject, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import (
     QFont, QColor, QPainter, QPen, QBrush, QFontMetrics, QPalette, QIcon
 )
@@ -38,6 +42,10 @@ LABEL_W = LABEL_W_MM * mm
 LABEL_H = LABEL_H_MM * mm
 
 CONFIG_PATH = Path(__file__).parent / "config.json"
+
+VERSION = "2.1"
+GITHUB_REPO = "Lacho101/SW-ETIQUETAS-GA"
+UPDATE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
 FUENTES_PDF = {
     "Helvetica": ("Helvetica-Bold", "Helvetica"),
@@ -93,6 +101,7 @@ DEFAULT_CFG = {
     "tam_linea2": 12,
     "copias": 1,
     "abrir_pdf": True,
+    "auto_update": True,
     "modo": "manual",
     "mostrar_desc": True,
     "mostrar_cod": True,
@@ -130,6 +139,79 @@ def guardar_cfg(cfg: dict):
             json.dump(cfg, f, indent=2, ensure_ascii=False)
     except Exception:
         pass
+
+
+# ── Actualizaciones automáticas ───────────────────────────────────────────────
+def _es_frozen():
+    return bool(getattr(sys, "frozen", False))
+
+def _a_pares(v):
+    """Convierte 'v2.1' o '2.1.0' en [2, 1, 0] para comparar versiones."""
+    res = []
+    for p in str(v).lstrip("v").replace("-", ".").split("."):
+        try:
+            res.append(int(p))
+        except ValueError:
+            res.append(0)
+    return res
+
+def _es_mas_nueva(actual, nueva):
+    a, b = _a_pares(actual), _a_pares(nueva)
+    n = max(len(a), len(b))
+    for i in range(n):
+        x = a[i] if i < len(a) else 0
+        y = b[i] if i < len(b) else 0
+        if y != x:
+            return y > x
+    return False
+
+def _obtener_ultima_publicacion():
+    """Consulta la última release del repo en GitHub."""
+    req = urllib.request.Request(
+        UPDATE_API,
+        headers={"User-Agent": "SW-ETIQUETAS-GA", "Accept": "application/vnd.github+json"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as r:
+        data = json.loads(r.read().decode("utf-8"))
+    tag = str(data.get("tag_name", "")).lstrip("v")
+    assets = data.get("assets", []) or []
+    asset = next((a for a in assets if str(a.get("name", "")).lower().endswith(".exe")), None)
+    return {
+        "version": tag,
+        "notas": data.get("body") or "",
+        "prerelease": bool(data.get("prerelease")),
+        "download_url": asset.get("browser_download_url") if asset else None,
+        "asset_name": asset.get("name") if asset else None,
+    }
+
+class CheckUpdateWorker(QObject):
+    listo = pyqtSignal(dict)
+    fallo = pyqtSignal(str)
+
+    def run(self):
+        try:
+            self.listo.emit(_obtener_ultima_publicacion())
+        except Exception as ex:
+            self.fallo.emit(str(ex))
+
+class DescargaWorker(QObject):
+    progreso = pyqtSignal(int, int)
+    listo = pyqtSignal(str)
+    fallo = pyqtSignal(str)
+
+    def __init__(self, url, destino):
+        super().__init__()
+        self.url = url
+        self.destino = destino
+
+    def run(self):
+        try:
+            def hook(done, block, total):
+                self.progreso.emit(done * block, total)
+            urllib.request.urlretrieve(self.url, self.destino, reporthook=hook)
+            self.listo.emit(self.destino)
+        except Exception as ex:
+            self.fallo.emit(str(ex))
 
 
 # ── PDF ───────────────────────────────────────────────────────────────────────
@@ -426,6 +508,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._cargar_cfg_ui()
         self._actualizar_preview()
+        QTimer.singleShot(2500, self._comprobar_actualizacion)
 
     def _build_ui(self):
         central = QWidget()
@@ -660,6 +743,15 @@ class MainWindow(QMainWindow):
         self.chk_abrir = QCheckBox("Abrir PDF")
         self.chk_abrir.setChecked(True)
         gl.addWidget(self.chk_abrir, 3, 2)
+
+        self.chk_update = QCheckBox("Buscar actualizaciones")
+        gl.addWidget(self.chk_update, 3, 3)
+
+        btn_upd = QPushButton("Buscar ahora")
+        btn_upd.setObjectName("secondary")
+        btn_upd.setToolTip("Comprobar si hay una versión más reciente en GitHub")
+        btn_upd.clicked.connect(lambda: self._comprobar_actualizacion(forzar=True))
+        gl.addWidget(btn_upd, 3, 4)
 
         # ── Selector de impresora ──────────────────────────────────────────────
         line2 = QFrame(); line2.setFrameShape(QFrame.Shape.HLine); line2.setStyleSheet("color:#eee")
@@ -1050,6 +1142,7 @@ class MainWindow(QMainWindow):
         self.sb_tam2.setValue(cfg.get("tam_linea2", 12))
         self.sb_copias.setValue(cfg.get("copias", 1))
         self.chk_abrir.setChecked(cfg.get("abrir_pdf", True))
+        self.chk_update.setChecked(cfg.get("auto_update", True))
         
         self.chk_desc.setChecked(cfg.get("mostrar_desc", True))
         self.chk_cod.setChecked(cfg.get("mostrar_cod", True))
@@ -1081,6 +1174,7 @@ class MainWindow(QMainWindow):
             "tam_linea2": self.sb_tam2.value(),
             "copias": self.sb_copias.value(),
             "abrir_pdf": self.chk_abrir.isChecked(),
+            "auto_update": self.chk_update.isChecked(),
             "modo": modo,
             "mostrar_desc": self.chk_desc.isChecked(),
             "mostrar_cod": self.chk_cod.isChecked(),
@@ -1089,6 +1183,155 @@ class MainWindow(QMainWindow):
             "serie": {k: v.text() for k, v in self._serie_vars.items()},
         }
         guardar_cfg(cfg)
+
+    # ── Actualizaciones: hacer check/download/instalar ──────────────────────────
+    def _comprobar_actualizacion(self, forzar=False):
+        if not forzar and not (getattr(self, "chk_update", None) and self.chk_update.isChecked()):
+            return
+        if getattr(self, "_update_checking", False):
+            return
+        self._update_checking = True
+        try:
+            self.status_bar.showMessage("Comprobando actualizaciones…")
+            self.thread_check = QThread(self)
+            self.worker_check = CheckUpdateWorker()
+            self.worker_check.moveToThread(self.thread_check)
+            self.thread_check.started.connect(self.worker_check.run)
+            self.thread_check.finished.connect(self.thread_check.deleteLater)
+            self.worker_check.listo.connect(self._on_check_ok)
+            self.worker_check.fallo.connect(self._on_check_fail)
+            self.thread_check.start()
+        except Exception:
+            self._update_checking = False
+
+    def _on_check_ok(self, data):
+        self._update_checking = False
+        try:
+            self.thread_check.quit()
+        except Exception:
+            pass
+        nueva = str(data.get("version", "")).lstrip("v")
+        actual = str(VERSION).lstrip("v")
+        if data.get("prerelease"):
+            return
+        if not nueva or not _es_mas_nueva(actual, nueva):
+            if self.status_bar:
+                self.status_bar.showMessage("Versión actualizada.")
+            return
+        url = data.get("download_url")
+        if not url:
+            if self.status_bar:
+                self.status_bar.showMessage("No se encontró el instalador en la última versión.")
+            return
+        notas = (data.get("notas") or "").strip()
+        msj = (
+            f"Nueva versión {nueva} disponible. (Tu versión: {actual})\n\n"
+            + (f"{notas}\n\n" if notas else "")
+            + "¿Quieres descargarla e instalarla ahora?"
+        )
+        resp = QMessageBox.question(
+            self, "Actualización disponible", msj,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if resp == QMessageBox.StandardButton.Yes:
+            self._descargar_actualizacion(url, data.get("asset_name") or "actualizacion.exe")
+
+    def _on_check_fail(self, mensaje):
+        self._update_checking = False
+        try:
+            self.thread_check.quit()
+        except Exception:
+            pass
+        if self.status_bar:
+            self.status_bar.showMessage("No se pudo comprobar actualizaciones.")
+
+    def _descargar_actualizacion(self, url, nombre):
+        tmpdir = tempfile.mkdtemp(prefix="ga_update_")
+        destino = os.path.join(tmpdir, nombre)
+        self._dl_progress = QProgressDialog(
+            "Descargando actualización…", None, 0, 100, self
+        )
+        self._dl_progress.setWindowTitle("Actualización")
+        self._dl_progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self._dl_progress.setValue(0)
+        self._dl_progress.setAutoClose(False)
+        self._dl_progress.setAutoReset(False)
+
+        self.thread_dl = QThread(self)
+        self.worker_dl = DescargaWorker(url, destino)
+        self.worker_dl.moveToThread(self.thread_dl)
+        self.thread_dl.started.connect(self.worker_dl.run)
+        self.thread_dl.finished.connect(self.thread_dl.deleteLater)
+        self.worker_dl.progreso.connect(self._on_dl_progreso)
+        self.worker_dl.listo.connect(self._on_dl_ok)
+        self.worker_dl.fallo.connect(self._on_dl_fail)
+        self.thread_dl.start()
+
+    def _on_dl_progreso(self, done, total):
+        if total and done is not None:
+            self._dl_progress.setValue(min(int(done * 100 / total), 100))
+
+    def _on_dl_ok(self, ruta):
+        try:
+            self._dl_progress.setValue(100)
+            self._dl_progress.close()
+        except Exception:
+            pass
+        if not _es_frozen():
+            QMessageBox.information(
+                self, "Actualización descargada",
+                f"El archivo se descargó en:\n{ruta}\n\n"
+                "Como la app se está ejecutando desde Python, instálala "
+                "manualmente (sustituye el .exe o ejecuta el instalador)."
+            )
+            return
+        self._aplicar_actualizacion(ruta)
+
+    def _on_dl_fail(self, mensaje):
+        try:
+            self._dl_progress.close()
+        except Exception:
+            pass
+        QMessageBox.critical(
+            self, "Error de descarga",
+            f"No se pudo descargar la actualización:\n{mensaje}"
+        )
+        if self.status_bar:
+            self.status_bar.showMessage("Error al descargar la actualización.")
+
+    def _aplicar_actualizacion(self, ruta):
+        try:
+            exe = os.path.realpath(sys.executable)
+            directorio = os.path.dirname(exe)
+            nombre = os.path.basename(exe)
+            nuevo = os.path.join(directorio, "_nueva_" + nombre)
+            shutil.move(ruta, nuevo)
+            bat = os.path.join(directorio, "_actualizar.bat")
+            contenido = (
+                "@echo off\r\n"
+                f'cd /d "{directorio}"\r\n'
+                ":espera\r\n"
+                f'tasklist /fi "IMAGENAME eq {nombre}" 2>nul | find /i "{nombre}" >nul\r\n'
+                "if %errorlevel%==0 ( timeout /t 1 /nobreak >nul & goto espera )\r\n"
+                f'move /y "{nuevo}" "{exe}"\r\n'
+                f'start "" "{exe}"\r\n'
+                'del "%~f0"\r\n'
+            )
+            with open(bat, "w") as f:
+                f.write(contenido)
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            subprocess.Popen(["cmd", "/c", bat], shell=False, creationflags=flags)
+            QMessageBox.information(
+                self, "Actualización",
+                "La actualización se instalará automáticamente al salir.\n"
+                "La aplicación se cerrará y se abrirá la nueva versión."
+            )
+            self.close()
+        except Exception as ex:
+            QMessageBox.critical(
+                self, "Error",
+                f"No se pudo preparar la actualización:\n{ex}"
+            )
 
 
 if __name__ == "__main__":
