@@ -1,0 +1,21 @@
+{
+  "fuente": "Arial",
+  "tam_linea1": 7,
+  "tam_linea2": 12,
+  "copias": 1,
+  "abrir_pdf": false,
+  "modo": "excel",
+  "mostrar_desc": true,
+  "mostrar_cod": true,
+  "mostrar_precio": true,
+  "impresora": "",
+  "serie": {
+    "pref": "A",
+    "n2i": "1",
+    "n2f": "1",
+    "n3i": "1",
+    "n3f": "6",
+    "n4i": "1",
+    "n4f": "5"
+  }
+}
