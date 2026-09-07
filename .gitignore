@@ -1,0 +1,11 @@
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Configuracion local
+config.json
+
+# Python
+__pycache__/
+*.pyc
