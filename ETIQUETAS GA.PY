@@ -1372,7 +1372,16 @@ class MainWindow(QMainWindow):
             directorio = os.path.dirname(exe)
             nombre = os.path.basename(exe)
             nuevo = os.path.join(directorio, "_nueva_" + nombre)
-            shutil.move(ruta, nuevo)
+            try:
+                if os.path.exists(nuevo):
+                    os.remove(nuevo)
+            except Exception:
+                pass
+            shutil.copy2(ruta, nuevo)
+            try:
+                os.remove(ruta)
+            except Exception:
+                pass
             bat = os.path.join(directorio, "_actualizar.bat")
             contenido = (
                 "@echo off\r\n"
@@ -1385,11 +1394,10 @@ class MainWindow(QMainWindow):
                 "  goto espera\r\n"
                 ")\r\n"
                 "timeout /t 2 /nobreak >nul\r\n"
-                f'if exist "{nuevo}" (\r\n'
-                f'  move /Y "{nuevo}" "{exe}" >nul 2>&1\r\n'
-                ")\r\n"
+                f'copy /Y "{nuevo}" "{exe}" >nul 2>&1\r\n'
+                f'if exist "{nuevo}" del "{nuevo}" >nul 2>&1\r\n'
                 f'start "" "{exe}"\r\n'
-                'timeout /t 2 /nobreak >nul\r\n'
+                "timeout /t 1 /nobreak >nul\r\n"
                 'del "%~f0"\r\n'
                 "endlocal\r\n"
             )
