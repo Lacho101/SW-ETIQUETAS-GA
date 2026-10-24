@@ -49,7 +49,7 @@ def _config_path():
 
 CONFIG_PATH = _config_path()
 
-VERSION = "2.1"
+VERSION = "2.2"
 GITHUB_REPO = "Lacho101/SW-ETIQUETAS-GA"
 UPDATE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
@@ -368,7 +368,24 @@ def imprimir_pdf_windows(ruta: str, impresora: str = ""):
 
 
 def abrir_pdf(ruta: str):
-    os.startfile(ruta)
+    # Intentar abrir con Brave primero
+    brave_paths = [
+        r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
+        r"C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\Application\brave.exe"),
+    ]
+    for bpath in brave_paths:
+        if os.path.exists(bpath):
+            try:
+                subprocess.Popen([bpath, ruta])
+                return
+            except Exception:
+                pass
+    # Fallback: abrir con el navegador/visor predeterminado
+    try:
+        os.startfile(ruta)
+    except Exception:
+        pass
 
 
 # ── Vista previa de etiqueta ──────────────────────────────────────────────────
@@ -570,11 +587,21 @@ class MainWindow(QMainWindow):
         hl.setContentsMargins(16, 10, 16, 10)
         title = QLabel("GRAN ALMACÉN ETIQUETAS                   by Lacho")
         title.setStyleSheet("color:#fff; font-size:15px; font-weight:700; background:transparent;")
-        size_lbl = QLabel("51.20 × 25.00 mm  |  EVA58")
+        size_lbl = QLabel(f"51.20 × 25.00 mm  |  EVA58  |  v{VERSION}")
         size_lbl.setStyleSheet("color:#FFFFFF; font-size:11px; background:transparent;")
+        self.btn_update_hdr = QPushButton("Actualizar")
+        self.btn_update_hdr.setObjectName("secondary")
+        self.btn_update_hdr.setStyleSheet(
+            "QPushButton { background:#FFFFFF; color:#F08800; border:none; border-radius:4px; "
+            "font-size:11px; font-weight:700; padding:4px 10px; } "
+            "QPushButton:hover { background:#FFF3E0; }"
+        )
+        self.btn_update_hdr.setVisible(False)
+        self.btn_update_hdr.clicked.connect(self._actualizar_desde_header)
         hl.addWidget(title)
         hl.addStretch()
         hl.addWidget(size_lbl)
+        hl.addWidget(self.btn_update_hdr)
         return frm
 
     def _modo_group(self):
@@ -1219,11 +1246,19 @@ class MainWindow(QMainWindow):
         nueva = str(data.get("version", "")).lstrip("v")
         actual = str(VERSION).lstrip("v")
         if data.get("prerelease"):
+            if hasattr(self, "btn_update_hdr"):
+                self.btn_update_hdr.setVisible(False)
             return
         if not nueva or not _es_mas_nueva(actual, nueva):
+            if hasattr(self, "btn_update_hdr"):
+                self.btn_update_hdr.setVisible(False)
             if self.status_bar:
                 self.status_bar.showMessage("Versión actualizada.")
             return
+        self._update_info = data
+        if hasattr(self, "btn_update_hdr"):
+            self.btn_update_hdr.setText(f"Actualizar a v{nueva}")
+            self.btn_update_hdr.setVisible(True)
         url = data.get("download_url")
         if not url:
             if self.status_bar:
@@ -1241,6 +1276,17 @@ class MainWindow(QMainWindow):
         )
         if resp == QMessageBox.StandardButton.Yes:
             self._descargar_actualizacion(url, data.get("asset_name") or "actualizacion.exe")
+
+    def _actualizar_desde_header(self):
+        data = getattr(self, "_update_info", None)
+        if not data:
+            self._comprobar_actualizacion(forzar=True)
+            return
+        url = data.get("download_url")
+        if url:
+            self._descargar_actualizacion(url, data.get("asset_name") or "actualizacion.exe")
+        else:
+            self._comprobar_actualizacion(forzar=True)
 
     def _on_check_fail(self, mensaje):
         self._update_checking = False
@@ -1316,14 +1362,23 @@ class MainWindow(QMainWindow):
             contenido = (
                 "@echo off\r\n"
                 f'cd /d "{directorio}"\r\n'
+                "setlocal enableextensions\r\n"
                 ":espera\r\n"
-                f'tasklist /fi "IMAGENAME eq {nombre}" 2>nul | find /i "{nombre}" >nul\r\n'
-                "if %errorlevel%==0 ( timeout /t 1 /nobreak >nul & goto espera )\r\n"
-                f'move /y "{nuevo}" "{exe}"\r\n'
+                f'tasklist /FI "IMAGENAME eq {nombre}" 2>nul | find /I "{nombre}" >nul\r\n'
+                "if %ERRORLEVEL%==0 (\r\n"
+                "  timeout /t 1 /nobreak >nul\r\n"
+                "  goto espera\r\n"
+                ")\r\n"
+                "timeout /t 2 /nobreak >nul\r\n"
+                f'if exist "{nuevo}" (\r\n'
+                f'  move /Y "{nuevo}" "{exe}" >nul 2>&1\r\n'
+                ")\r\n"
                 f'start "" "{exe}"\r\n'
+                'timeout /t 2 /nobreak >nul\r\n'
                 'del "%~f0"\r\n'
+                "endlocal\r\n"
             )
-            with open(bat, "w") as f:
+            with open(bat, "w", encoding="utf-8") as f:
                 f.write(contenido)
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             subprocess.Popen(["cmd", "/c", bat], shell=False, creationflags=flags)
