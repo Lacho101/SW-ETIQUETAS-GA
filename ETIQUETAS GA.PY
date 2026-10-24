@@ -49,10 +49,10 @@ def _config_path():
 
 CONFIG_PATH = _config_path()
 
-VERSION = "2.2"
+VERSION = "2.2.1"
 GITHUB_REPO = "Lacho101/SW-ETIQUETAS-GA"
 UPDATE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-UPDATE_TAG = "v2.2"
+UPDATE_TAG = "v2.2.1"
 UPDATE_ASSET_NAME = "ETIQUETAS.GA.exe"
 UPDATE_DIRECT_URL = f"https://github.com/{GITHUB_REPO}/releases/download/{UPDATE_TAG}/{UPDATE_ASSET_NAME}"
 
