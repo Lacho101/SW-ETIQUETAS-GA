@@ -52,9 +52,6 @@ CONFIG_PATH = _config_path()
 VERSION = "2.2.1"
 GITHUB_REPO = "Lacho101/SW-ETIQUETAS-GA"
 UPDATE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-UPDATE_TAG = "v2.2.1"
-UPDATE_ASSET_NAME = "ETIQUETAS.GA.exe"
-UPDATE_DIRECT_URL = f"https://github.com/{GITHUB_REPO}/releases/download/{UPDATE_TAG}/{UPDATE_ASSET_NAME}"
 
 FUENTES_PDF = {
     "Helvetica": ("Helvetica-Bold", "Helvetica"),
@@ -175,34 +172,22 @@ def _es_mas_nueva(actual, nueva):
     return False
 
 def _obtener_ultima_publicacion():
-    """Consulta la última release del repo en GitHub. Usa URL directa si el repo es privado."""
-    try:
-        req = urllib.request.Request(
-            UPDATE_API,
-            headers={"User-Agent": "SW-ETIQUETAS-GA", "Accept": "application/vnd.github+json"},
-        )
-        with urllib.request.urlopen(req, timeout=10) as r:
-            data = json.loads(r.read().decode("utf-8"))
-        tag = str(data.get("tag_name", "")).lstrip("v")
-        assets = data.get("assets", []) or []
-        asset = next((a for a in assets if str(a.get("name", "")).lower().endswith(".exe")), None)
-        if asset and asset.get("browser_download_url"):
-            return {
-                "version": tag,
-                "notas": data.get("body") or "",
-                "prerelease": bool(data.get("prerelease")),
-                "download_url": asset.get("browser_download_url"),
-                "asset_name": asset.get("name") if asset else None,
-            }
-    except Exception:
-        pass
-    # Fallback para repo privado: usar URL directa al asset
+    """Consulta la última release del repo en GitHub."""
+    req = urllib.request.Request(
+        UPDATE_API,
+        headers={"User-Agent": "SW-ETIQUETAS-GA", "Accept": "application/vnd.github+json"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as r:
+        data = json.loads(r.read().decode("utf-8"))
+    tag = str(data.get("tag_name", "")).lstrip("v")
+    assets = data.get("assets", []) or []
+    asset = next((a for a in assets if str(a.get("name", "")).lower().endswith(".exe")), None)
     return {
-        "version": UPDATE_TAG.lstrip("v"),
-        "notas": "",
-        "prerelease": False,
-        "download_url": UPDATE_DIRECT_URL,
-        "asset_name": UPDATE_ASSET_NAME,
+        "version": tag,
+        "notas": data.get("body") or "",
+        "prerelease": bool(data.get("prerelease")),
+        "download_url": asset.get("browser_download_url") if asset else None,
+        "asset_name": asset.get("name") if asset else None,
     }
 
 class CheckUpdateWorker(QObject):
@@ -1372,36 +1357,19 @@ class MainWindow(QMainWindow):
             directorio = os.path.dirname(exe)
             nombre = os.path.basename(exe)
             nuevo = os.path.join(directorio, "_nueva_" + nombre)
-            try:
-                if os.path.exists(nuevo):
-                    os.remove(nuevo)
-            except Exception:
-                pass
-            shutil.copy2(ruta, nuevo)
-            try:
-                os.remove(ruta)
-            except Exception:
-                pass
+            shutil.move(ruta, nuevo)
             bat = os.path.join(directorio, "_actualizar.bat")
             contenido = (
                 "@echo off\r\n"
                 f'cd /d "{directorio}"\r\n'
-                "setlocal enableextensions\r\n"
                 ":espera\r\n"
-                f'tasklist /FI "IMAGENAME eq {nombre}" 2>nul | find /I "{nombre}" >nul\r\n'
-                "if %ERRORLEVEL%==0 (\r\n"
-                "  timeout /t 1 /nobreak >nul\r\n"
-                "  goto espera\r\n"
-                ")\r\n"
-                "timeout /t 2 /nobreak >nul\r\n"
-                f'copy /Y "{nuevo}" "{exe}" >nul 2>&1\r\n'
-                f'if exist "{nuevo}" del "{nuevo}" >nul 2>&1\r\n'
+                f'tasklist /fi "IMAGENAME eq {nombre}" 2>nul | find /i "{nombre}" >nul\r\n'
+                "if %errorlevel%==0 ( timeout /t 1 /nobreak >nul & goto espera )\r\n"
+                f'move /y "{nuevo}" "{exe}"\r\n'
                 f'start "" "{exe}"\r\n'
-                "timeout /t 1 /nobreak >nul\r\n"
                 'del "%~f0"\r\n'
-                "endlocal\r\n"
             )
-            with open(bat, "w", encoding="utf-8") as f:
+            with open(bat, "w") as f:
                 f.write(contenido)
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             subprocess.Popen(["cmd", "/c", bat], shell=False, creationflags=flags)
