@@ -52,6 +52,9 @@ CONFIG_PATH = _config_path()
 VERSION = "2.2"
 GITHUB_REPO = "Lacho101/SW-ETIQUETAS-GA"
 UPDATE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+UPDATE_TAG = "v2.2"
+UPDATE_ASSET_NAME = "ETIQUETAS.GA.exe"
+UPDATE_DIRECT_URL = f"https://github.com/{GITHUB_REPO}/releases/download/{UPDATE_TAG}/{UPDATE_ASSET_NAME}"
 
 FUENTES_PDF = {
     "Helvetica": ("Helvetica-Bold", "Helvetica"),
@@ -172,22 +175,34 @@ def _es_mas_nueva(actual, nueva):
     return False
 
 def _obtener_ultima_publicacion():
-    """Consulta la última release del repo en GitHub."""
-    req = urllib.request.Request(
-        UPDATE_API,
-        headers={"User-Agent": "SW-ETIQUETAS-GA", "Accept": "application/vnd.github+json"},
-    )
-    with urllib.request.urlopen(req, timeout=10) as r:
-        data = json.loads(r.read().decode("utf-8"))
-    tag = str(data.get("tag_name", "")).lstrip("v")
-    assets = data.get("assets", []) or []
-    asset = next((a for a in assets if str(a.get("name", "")).lower().endswith(".exe")), None)
+    """Consulta la última release del repo en GitHub. Usa URL directa si el repo es privado."""
+    try:
+        req = urllib.request.Request(
+            UPDATE_API,
+            headers={"User-Agent": "SW-ETIQUETAS-GA", "Accept": "application/vnd.github+json"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        tag = str(data.get("tag_name", "")).lstrip("v")
+        assets = data.get("assets", []) or []
+        asset = next((a for a in assets if str(a.get("name", "")).lower().endswith(".exe")), None)
+        if asset and asset.get("browser_download_url"):
+            return {
+                "version": tag,
+                "notas": data.get("body") or "",
+                "prerelease": bool(data.get("prerelease")),
+                "download_url": asset.get("browser_download_url"),
+                "asset_name": asset.get("name") if asset else None,
+            }
+    except Exception:
+        pass
+    # Fallback para repo privado: usar URL directa al asset
     return {
-        "version": tag,
-        "notas": data.get("body") or "",
-        "prerelease": bool(data.get("prerelease")),
-        "download_url": asset.get("browser_download_url") if asset else None,
-        "asset_name": asset.get("name") if asset else None,
+        "version": UPDATE_TAG.lstrip("v"),
+        "notas": "",
+        "prerelease": False,
+        "download_url": UPDATE_DIRECT_URL,
+        "asset_name": UPDATE_ASSET_NAME,
     }
 
 class CheckUpdateWorker(QObject):
